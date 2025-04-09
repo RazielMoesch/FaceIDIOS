@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torchvision
 import torchvision.models as models
 import coremltools as ct
 
@@ -9,16 +8,14 @@ class FaceRecognitionModel(nn.Module):
     def __init__(self, num_classes):
         super(FaceRecognitionModel, self).__init__()
 
-        # Load pretrained EfficientNet from torchvision
-        self.backbone = models.efficientnet_b0(pretrained=True)
+        # Load pretrained EfficientNet
+        self.backbone = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT)
 
-        # Get the feature dimension from EfficientNet
+        # Remove classifier and get feature size
         self.feature_dim = self.backbone.classifier[1].in_features
-
-        # Remove the original classifier
         self.backbone.classifier = nn.Identity()
 
-        # Add custom layers for face recognition
+        # Custom classification head
         self.dropout = nn.Dropout(p=0.5)
         self.fc1 = nn.Linear(self.feature_dim, 512)
         self.bn1 = nn.BatchNorm1d(512)
@@ -26,35 +23,35 @@ class FaceRecognitionModel(nn.Module):
         self.fc2 = nn.Linear(512, num_classes)
 
     def forward(self, x):
-        # Extract features from backbone
-        features = self.backbone(x)
-
-        # Classification head
-        x = self.dropout(features)
+        x = self.backbone(x)
+        x = self.dropout(x)
         x = self.fc1(x)
         x = self.bn1(x)
         x = self.relu(x)
         x = self.fc2(x)
-
         return x
-    
 
 
 if __name__ == "__main__":
-    
-    model = FaceRecognitionModel(105)
+    num_classes = 105
+    model = FaceRecognitionModel(num_classes)
     model.load_state_dict(torch.load("best_face_recognition_model.pth", map_location='cpu'))
-    
     model.eval()
-    
-    dummy_input = torch.randn((3, 3, 244, 244))
-    
-    traced_model = torch.jit.trace(model, dummy_input)
-    
-    traced_out = traced_model(dummy_input)
-    
-    print("output dummy shape:", model(dummy_input).shape)
-    
-    coreml_model = ct.convert(traced_model, convert_to='mlprogram', inputs=[ct.TensorType(shape=dummy_input.shape)])
-    
-    coreml_model.save('FaceRecCoreML.mlpackage')
+
+    # CoreML requires input shape: (batch_size, channels, height, width)
+    example_input = torch.rand(1, 3, 224, 224)  # EfficientNet expects 224x224, not 244
+
+    # Trace model
+    traced_model = torch.jit.trace(model, example_input)
+
+    # Convert to Core ML Program (iOS 17+)
+    coreml_model = ct.convert(
+        traced_model,
+        convert_to='mlprogram',  # Required for CoreML 8.3+
+        inputs=[ct.TensorType(shape=example_input.shape, name="input_image")]
+    )
+
+    # Save the model in new .mlpackage format
+    coreml_model.save("FaceRecognition.mlpackage")
+
+    print("✅ Conversion complete! Saved as FaceRecognition.mlpackage")
